@@ -1,74 +1,89 @@
 import asyncio
+import os
 import aiohttp
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
+from motor.motor_asyncio import AsyncIOMotorClient
+from aiohttp import web
+from datetime import datetime
 
-# --- CONFIG ---
-BOT_TOKEN = "YOUR_NEW_TOKEN_HERE" # BotFather se naya le lena
-bot = Bot(token=BOT_TOKEN)
+# ========================================================
+# KUSHAL PREMIUM CONFIG - BAS YE EK BAAR EDIT KARO
+# ========================================================
+TOKEN = "8878551213:AAEuXkfq8ZLkBZYZ7umIhrePCWKyinJObDw"
+MONGO_URI = "mongodb+srv://Elevenyts:Elevenyts@cluster0.vuyc1u2.mongodb.net/?retryWrites=true&w=majority"
+# ========================================================
+
+bot = Bot(token=TOKEN)
 dp = Dispatcher()
+db = AsyncIOMotorClient(MONGO_URI)['kushal_premium_db']
 
-# 1. Luhn Algorithm
-def is_luhn_valid(card_number):
-    digits = [int(d) for d in str(card_number) if d.isdigit()]
-    checksum = digits[-1]
-    payload = digits[:-1][::-1]
-    total = checksum + sum(payload[i] if i % 2 == 1 else (payload[i] * 2 if payload[i] * 2 < 10 else payload[i] * 2 - 9) for i in range(len(payload)))
-    return total % 10 == 0
+# --- Web Server (24/7 Keeping) ---
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get('/', lambda r: web.Response(text="Kushal Premium Bot Running!"))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    await web.TCPSite(runner, '0.0.0.0', int(os.environ.get("PORT", 8080))).start()
 
-# 2. BIN Data Fetcher
-async def get_card_details(bin_code):
+# --- Helpers ---
+def is_luhn_valid(cc):
+    digits = [int(d) for d in str(cc) if d.isdigit()]
+    return sum(digits[::-2] + [sum(divmod(2 * d, 10)) for d in digits[-2::-2]]) % 10 == 0
+
+async def get_bin_info(bin_code):
     async with aiohttp.ClientSession() as session:
         try:
             async with session.get(f"https://lookup.binlist.net/{bin_code}") as resp:
-                if resp.status == 200:
-                    return await resp.json()
-        except:
-            return None
+                if resp.status == 200: return await resp.json()
+        except: return None
     return None
 
-@dp.message(F.text.startswith(".chk"))
-async def chk_command(message: types.Message):
-    args = message.text.split()
-    if len(args) < 2:
-        await message.reply("❌ Format: `.chk [card|mm|yy|cvv]`")
-        return
-
-    # Split card details
-    card_data = args[1].split('|')
-    cc = card_data[0]
-    bin_code = cc[:6]
+# --- Commands ---
+@dp.message(Command("start"))
+async def welcome(message: types.Message):
+    user = message.from_user
+    mention = f"[{user.full_name}](tg://user?id={user.id})"
+    text = (f"🔥 **WELCOME TO KUSHAL PREMIUM CC CHECKER** 🔥\n\n"
+            f"👤 User: {mention}\n"
+            f"🆔 ID: `{user.id}`\n\n"
+            f"Command: `.chk [cc|mm|yy|cvv]`")
     
-    # Real-time Info Fetching
-    bin_info = await get_card_details(bin_code)
-    
-    # Logic: Validate
-    if not is_luhn_valid(cc):
-        status = "Declined ❌"
-        response = "Invalid Card Number"
+    photos = await bot.get_user_profile_photos(user.id, limit=1)
+    if photos.total_count > 0:
+        await bot.send_photo(message.chat.id, photos.photos[0][0].file_id, caption=text, parse_mode="Markdown")
     else:
-        status = "Approved ✅"
-        response = "Card is Valid & Live"
+        await message.answer(text, parse_mode="Markdown")
 
-    # Extracting Data
-    brand = bin_info.get('brand', 'Unknown') if bin_info else "Unknown"
+@dp.message(F.text.startswith(".chk"))
+async def check_cc(message: types.Message):
+    args = message.text.split()
+    if len(args) < 2: return await message.reply("❌ Format: `.chk cc|mm|yy|cvv`")
+    
+    cc = args[1].split('|')[0]
+    bin_info = await get_bin_info(cc[:6])
+    
+    status = "Approved ✅" if is_luhn_valid(cc) else "Declined ❌"
     bank = bin_info.get('bank', {}).get('name', 'Unknown') if bin_info else "Unknown"
     country = bin_info.get('country', {}).get('name', 'Unknown') if bin_info else "Unknown"
-    type_card = bin_info.get('type', 'Unknown') if bin_info else "Unknown"
-
-    result = (
-        f"━━━━━━━━━━━━━━\n"
-        f"💳 **CC:** `{cc}`\n"
-        f"📡 **Status:** {status}\n"
-        f"📝 **Response:** {response}\n"
-        f"━━━━━━━━━━━━━━\n"
-        f"🏦 **Bank:** {bank}\n"
-        f"🌍 **Country:** {country} 🌍\n"
-        f"🏷 **Type:** {brand} {type_card}\n"
-        f"🛠 **Gateway:** Stripe\n"
-        f"━━━━━━━━━━━━━\n"
-        f"👤 **Checked by:** {message.from_user.full_name}\n"
-        f"🆔 **ID:** `{message.from_user.id}`\n"
-        f"━━━━━━━━━━━━━━"
-    )
+    brand = bin_info.get('brand', 'Unknown') if bin_info else "Unknown"
+    
+    result = (f"✨ **KUSHAL CC RESULT** ✨\n"
+              f"━━━━━━━━━━━━━━━━━━\n"
+              f"💳 **CARD:** `{cc}`\n"
+              f"📡 **STATUS:** {status}\n"
+              f"🏦 **BANK:** {bank}\n"
+              f"🌍 **COUNTRY:** {country}\n"
+              f"🏷 **TYPE:** {brand}\n"
+              f"━━━━━━━━━━━━━━━━━━\n"
+              f"👤 **CHECKED BY:** {message.from_user.full_name}\n"
+              f"🆔 **USER ID:** `{message.from_user.id}`\n"
+              f"⏰ **TIME:** {datetime.now().strftime('%H:%M:%S')}")
     await message.reply(result, parse_mode="Markdown")
+
+async def main():
+    await start_web_server()
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
