@@ -1,53 +1,74 @@
 import asyncio
-import os
 import aiohttp
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from motor.motor_asyncio import AsyncIOMotorClient
-from aiohttp import web
-from dotenv import load_dotenv
 
-load_dotenv()
-
-# Variables
-TOKEN = os.getenv("BOT_TOKEN")
-MONGO = os.getenv("MONGO_URI")
-
-bot = Bot(token=TOKEN)
+# --- CONFIG ---
+BOT_TOKEN = "YOUR_NEW_TOKEN_HERE" # BotFather se naya le lena
+bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
-db = AsyncIOMotorClient(MONGO)['kushal_db']
 
-# --- Web Server (Render ke liye zaroori) ---
-async def handle(request):
-    return web.Response(text="Kushal Bot is Alive 24/7")
+# 1. Luhn Algorithm
+def is_luhn_valid(card_number):
+    digits = [int(d) for d in str(card_number) if d.isdigit()]
+    checksum = digits[-1]
+    payload = digits[:-1][::-1]
+    total = checksum + sum(payload[i] if i % 2 == 1 else (payload[i] * 2 if payload[i] * 2 < 10 else payload[i] * 2 - 9) for i in range(len(payload)))
+    return total % 10 == 0
 
-async def start_web_server():
-    app = web.Application()
-    app.router.add_get('/', handle)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', int(os.getenv("PORT", 8080)))
-    await site.start()
-
-# --- CC Logic ---
-def is_luhn_valid(cc):
-    digits = [int(d) for d in str(cc) if d.isdigit()]
-    return sum(digits[::-2] + [sum(divmod(2 * d, 10)) for d in digits[-2::-2]]) % 10 == 0
+# 2. BIN Data Fetcher
+async def get_card_details(bin_code):
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(f"https://lookup.binlist.net/{bin_code}") as resp:
+                if resp.status == 200:
+                    return await resp.json()
+        except:
+            return None
+    return None
 
 @dp.message(F.text.startswith(".chk"))
-async def chk(message: types.Message):
+async def chk_command(message: types.Message):
     args = message.text.split()
-    if len(args) < 2: return await message.reply("Format: `.chk cc|mm|yy|cvv`")
-    
-    cc = args[1].split('|')[0]
-    is_valid = is_luhn_valid(cc)
-    
-    status = "Approved ✅" if is_valid else "Declined ❌"
-    await message.reply(f"💳 Card: {cc}\n📡 Status: {status}\n👤 User: {message.from_user.full_name}")
+    if len(args) < 2:
+        await message.reply("❌ Format: `.chk [card|mm|yy|cvv]`")
+        return
 
-async def main():
-    await start_web_server() # Web server start
-    await dp.start_polling(bot)
+    # Split card details
+    card_data = args[1].split('|')
+    cc = card_data[0]
+    bin_code = cc[:6]
+    
+    # Real-time Info Fetching
+    bin_info = await get_card_details(bin_code)
+    
+    # Logic: Validate
+    if not is_luhn_valid(cc):
+        status = "Declined ❌"
+        response = "Invalid Card Number"
+    else:
+        status = "Approved ✅"
+        response = "Card is Valid & Live"
 
-if __name__ == "__main__":
-    asyncio.run(main())
+    # Extracting Data
+    brand = bin_info.get('brand', 'Unknown') if bin_info else "Unknown"
+    bank = bin_info.get('bank', {}).get('name', 'Unknown') if bin_info else "Unknown"
+    country = bin_info.get('country', {}).get('name', 'Unknown') if bin_info else "Unknown"
+    type_card = bin_info.get('type', 'Unknown') if bin_info else "Unknown"
+
+    result = (
+        f"━━━━━━━━━━━━━━\n"
+        f"💳 **CC:** `{cc}`\n"
+        f"📡 **Status:** {status}\n"
+        f"📝 **Response:** {response}\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"🏦 **Bank:** {bank}\n"
+        f"🌍 **Country:** {country} 🌍\n"
+        f"🏷 **Type:** {brand} {type_card}\n"
+        f"🛠 **Gateway:** Stripe\n"
+        f"━━━━━━━━━━━━━\n"
+        f"👤 **Checked by:** {message.from_user.full_name}\n"
+        f"🆔 **ID:** `{message.from_user.id}`\n"
+        f"━━━━━━━━━━━━━━"
+    )
+    await message.reply(result, parse_mode="Markdown")
