@@ -1,2 +1,4 @@
 aiogram
-requests
+motor
+aiohttp
+python-dotenv
